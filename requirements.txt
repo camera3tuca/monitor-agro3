@@ -1,6 +1,7 @@
 streamlit
-yfinance
 pandas
 numpy
-plotly
+yfinance
 requests
+python-dateutil
+plotly
