@@ -1,196 +1,187 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+# ============================================================
+# AGROMARKET INTELLIGENCE
+# Monitoramento Inteligente do Agronegócio
+# ============================================================
 
-# ===============================
+import streamlit as st
+import pandas as pd
+import numpy as np
+import requests
+import yfinance as yf
+from datetime import datetime, timedelta
+import json
+import time
+import plotly.graph_objects as go
+
+# ============================================================
 # CONFIGURAÇÃO GERAL
-# ===============================
+# ============================================================
+
 st.set_page_config(
     page_title="AgroMarket Intelligence",
     layout="wide"
 )
 
-# ===============================
+FINNHUB_API_KEY = "d4uouchr01qnm7pnasq0d4uouchr01qnm7pnasqg"
+NEWS_API_KEY = "ec7100fa90ef4e3f9a69a914050dd736"
+BRAPI_API_TOKEN = "iExnKM1xcbQcYL3cNPhPQ3"
+
+PROJECT_NAME = "AgroMarket Intelligence"
+WHATSAPP = "(62) 99975-5774"
+
+# ============================================================
 # HEADER
-# ===============================
-st.markdown(
-    """
-    <h1 style="color:#2ecc71;margin-bottom:0">
-        AgroMarket Intelligence
-    </h1>
-    <p style="color:gray;margin-top:5px">
-        Monitoramento inteligente de ativos do Agronegócio
-    </p>
-    <hr>
-    """,
-    unsafe_allow_html=True
-)
+# ============================================================
 
-# ===============================
-# SIDEBAR
-# ===============================
-st.sidebar.header("Configurações")
+st.markdown(f"""
+# 🌱 {PROJECT_NAME}
+### Monitoramento Inteligente do Agronegócio  
+📲 **Contato:** {WHATSAPP}
+---
+""")
 
-dias = st.sidebar.slider(
-    "Período de análise (dias)",
-    min_value=30,
-    max_value=365,
-    value=180
-)
+# ============================================================
+# CLASSE PRINCIPAL – MOTOR COMPLETO (Claude)
+# ============================================================
 
-ativos_agro = {
-    "JBS (Brasil)": "JBSS3.SA",
-    "SLC Agrícola": "SLCE3.SA",
-    "Rumo Logística": "RAIL3.SA",
-    "Klabin": "KLBN11.SA",
-    "BRF": "BRFS3.SA",
-    "Deere (BDR)": "DEEC34.SA",
-    "Bunge (BDR)": "BUNG34.SA",
-    "Mosaic (BDR)": "MOSC34.SA"
-}
+class AdvancedNewsTracker:
 
-ativo_selecionado = st.sidebar.selectbox(
-    "Selecione um ativo do Agronegócio",
-    list(ativos_agro.keys())
-)
+    def __init__(self):
+        self.params = {
+            'stop_loss': 0.03,
+            'take_profit': 0.15,
+            'min_score': 20,
+            'hold_period': 5,
+            'earnings_window': 45,
+            'dividend_window': 30,
+            'earnings_0_3': 60,
+            'earnings_4_7': 55,
+            'earnings_8_14': 50,
+            'earnings_15_30': 45,
+            'earnings_31_45': 35,
+            'dividend_0_1': 50,
+            'dividend_2_5': 45,
+            'dividend_6_10': 40,
+            'dividend_11_20': 35,
+            'dividend_21_30': 30,
+        }
 
-ticker = ativos_agro[ativo_selecionado]
+        self.trusted_sources = [
+            'reuters','bloomberg','wsj','financial times','cnbc',
+            'marketwatch','seeking alpha','benzinga','barrons',
+            'yahoo finance','sec','investor relations'
+        ]
 
-# ===============================
-# DOWNLOAD DOS DADOS
-# ===============================
-@st.cache_data
-def carregar_dados(ticker, dias):
-    fim = datetime.today()
-    inicio = fim - timedelta(days=dias)
-    df = yf.download(ticker, start=inicio, end=fim)
-    return df
+        self.ticker_map = self.get_bdr_mapping()
 
-df = carregar_dados(ticker, dias)
+    # --------------------------------------------------------
+    def get_bdr_mapping(self):
+        mapping = {}
+        try:
+            url = f"https://brapi.dev/api/quote/list?token={BRAPI_API_TOKEN}"
+            r = requests.get(url, timeout=20)
+            data = r.json().get("stocks", [])
+            for s in data:
+                if s["stock"].endswith(("34","35")):
+                    mapping[s["stock"][:-2]] = s["stock"]
+        except:
+            pass
+        return mapping
 
-# ===============================
-# VALIDAÇÃO
-# ===============================
-if df.empty:
-    st.error("Não foi possível carregar dados para este ativo.")
-    st.stop()
+    # --------------------------------------------------------
+    def get_news(self, ticker):
+        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_date = datetime.now().strftime("%Y-%m-%d")
+        url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={from_date}&to={to_date}&token={FINNHUB_API_KEY}"
+        try:
+            r = requests.get(url, timeout=10)
+            return r.json() if r.status_code == 200 else []
+        except:
+            return []
 
-# ===============================
-# MÉDIAS MÓVEIS
-# ===============================
-df["MM21"] = df["Close"].rolling(21).mean()
-df["MM50"] = df["Close"].rolling(50).mean()
+    # --------------------------------------------------------
+    def get_yahoo_data(self, ticker):
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            cal = stock.calendar
+            return {
+                "news": stock.news if hasattr(stock,"news") else [],
+                "earnings": cal,
+                "ex_div": info.get("exDividendDate"),
+                "yield": info.get("dividendYield")
+            }
+        except:
+            return {}
 
-# ===============================
-# SINAL SIMPLES
-# ===============================
-ultimo = df.iloc[-1]
+    # --------------------------------------------------------
+    def analyze_ticker(self, ticker):
+        score = 0
+        events = []
 
-if ultimo["Close"] > ultimo["MM21"] > ultimo["MM50"]:
-    sinal = "🟢 Tendência de Alta"
-    cor = "#2ecc71"
-elif ultimo["Close"] < ultimo["MM21"] < ultimo["MM50"]:
-    sinal = "🔴 Tendência de Baixa"
-    cor = "#e74c3c"
-else:
-    sinal = "🟡 Atenção / Lateral"
-    cor = "#f1c40f"
+        news = self.get_news(ticker)
+        yahoo = self.get_yahoo_data(ticker)
 
-# ===============================
-# RESUMO
-# ===============================
-col1, col2, col3 = st.columns(3)
+        for n in news[:5]:
+            title = n.get("headline","").lower()
+            if any(x in title for x in ["earnings","results"]):
+                score += 30
+                events.append("Earnings anunciado")
+            if any(x in title for x in ["guidance","outlook"]):
+                score += 30
+                events.append("Guidance anunciado")
+            if any(x in title for x in ["merger","acquisition"]):
+                score += 30
+                events.append("Fusão/Aquisição")
 
-col1.metric(
-    "Preço Atual",
-    f"R$ {ultimo['Close']:.2f}"
-)
+        if yahoo.get("ex_div"):
+            score += 20
+            events.append("Dividendo identificado")
 
-col2.metric(
-    "Variação do Dia",
-    f"{ultimo['Close'] - ultimo['Open']:.2f}"
-)
+        if score >= self.params["min_score"]:
+            return {
+                "Ticker": ticker,
+                "BDR": self.ticker_map.get(ticker,"N/A"),
+                "Score": score,
+                "Eventos": ", ".join(set(events))
+            }
 
-col3.markdown(
-    f"""
-    <div style="padding:15px;border-radius:8px;background:{cor};color:black;font-weight:bold;text-align:center">
-        {sinal}
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+        return None
 
-# ===============================
-# GRÁFICO
-# ===============================
-fig = go.Figure()
+    # --------------------------------------------------------
+    def scan(self, tickers):
+        results = []
+        for t in tickers:
+            res = self.analyze_ticker(t)
+            if res:
+                results.append(res)
+            time.sleep(0.3)
+        return pd.DataFrame(results)
 
-fig.add_trace(
-    go.Candlestick(
-        x=df.index,
-        open=df["Open"],
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"],
-        name="Preço"
-    )
-)
+# ============================================================
+# LISTA DE ATIVOS AGRO
+# ============================================================
 
-fig.add_trace(
-    go.Scatter(
-        x=df.index,
-        y=df["MM21"],
-        line=dict(color="blue", width=1),
-        name="MM21"
-    )
-)
+AGRO_TICKERS = [
+    "AAPL","MSFT","DE","MOS","BG","ADM","TSM","NKE",
+    "JBS","SLCE3","SUZB3","SMTO3"
+]
 
-fig.add_trace(
-    go.Scatter(
-        x=df.index,
-        y=df["MM50"],
-        line=dict(color="orange", width=1),
-        name="MM50"
-    )
-)
+# ============================================================
+# EXECUÇÃO
+# ============================================================
 
-fig.update_layout(
-    height=600,
-    xaxis_rangeslider_visible=False,
-    title=f"Gráfico do ativo: {ativo_selecionado}",
-    template="plotly_dark"
-)
+st.sidebar.header("⚙️ Parâmetros")
+min_score = st.sidebar.slider("Score mínimo", 20, 80, 20)
 
-st.plotly_chart(fig, use_container_width=True)
+tracker = AdvancedNewsTracker()
 
-# ===============================
-# CTA
-# ===============================
-st.markdown("---")
+if st.button("🔍 Executar Monitoramento"):
+    with st.spinner("Analisando ativos do agronegócio..."):
+        df = tracker.scan(AGRO_TICKERS)
 
-st.markdown(
-    """
-    ### 📲 Quer receber alertas automáticos no WhatsApp?
-    Monitoramento diário, sinais objetivos e linguagem simples para o produtor rural.
-    
-    **Entre em contato:**  
-    **(62) 99975-5774**
-    """
-)
-
-# ===============================
-# RODAPÉ
-# ===============================
-st.markdown(
-    """
-    <hr>
-    <center>
-    <small>
-    AgroMarket Intelligence • Sistema de monitoramento automatizado para o Agronegócio
-    </small>
-    </center>
-    """,
-    unsafe_allow_html=True
-)
+    if df.empty:
+        st.warning("Nenhuma oportunidade encontrada.")
+    else:
+        st.success(f"{len(df)} oportunidades identificadas")
+        st.dataframe(df.sort_values("Score", ascending=False), use_container_width=True)
